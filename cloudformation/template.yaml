@@ -1,59 +1,202 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
-Description: 'Nested CloudFormation template to create an S3 bucket with versioning and public access blocking'
+Description: 'Root CloudFormation template for AWS Serverless Order Pipeline - DynamoDB Orders Table with Event Streams'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Nested Stack Configuration"
+        Parameters:
+          - NestedTemplatesBucketUrl
+      - Label:
+          default: "Common Configuration"
+        Parameters:
+          - ProjectName
+          - Environment
+          - CiSuffix
+      - Label:
+          default: "DynamoDB Table Configuration"
+        Parameters:
+          - TableBaseName
+          - BillingMode
+          - ProvisionedReadCapacity
+          - ProvisionedWriteCapacity
+      - Label:
+          default: "Streams & Recovery Configuration"
+        Parameters:
+          - EnableStreams
+          - StreamViewType
+          - EnablePointInTimeRecovery
+      - Label:
+          default: "Encryption Configuration"
+        Parameters:
+          - KmsKey
+    ParameterLabels:
+      NestedTemplatesBucketUrl:
+        default: "Nested Templates S3 URL"
+      ProjectName:
+        default: "Project Name"
+      Environment:
+        default: "Environment"
+      TableBaseName:
+        default: "Table Base Name"
+      BillingMode:
+        default: "Billing Mode"
+      ProvisionedReadCapacity:
+        default: "Read Capacity Units"
+      ProvisionedWriteCapacity:
+        default: "Write Capacity Units"
+      CiSuffix:
+        default: "CI Suffix"
+      EnableStreams:
+        default: "Enable DynamoDB Streams"
+      StreamViewType:
+        default: "Stream View Type"
+      EnablePointInTimeRecovery:
+        default: "Enable PITR"
+      KmsKey:
+        default: "KMS Key (ARN / Alias)"
 
 Parameters:
+  NestedTemplatesBucketUrl:
+    Type: String
+    Default: "https://subhamay-cfn-templates-bucket-270453428528-us-east-1.s3.us-east-1.amazonaws.com"
+    Description: "S3 URL base for nested stack templates"
+    MinLength: 10
+
   ProjectName:
     Type: String
-    Description: "Project name to use as a bucket prefix"
+    Default: "proj-ztc"
+    Description: "Project name to use as a table prefix"
     MinLength: 1
     MaxLength: 20
     AllowedPattern: "^[a-z0-9-]+$"
     ConstraintDescription: "Project name must be lowercase letters, numbers, and hyphens only"
 
-  BucketBaseName:
-    Type: String
-    Default: cfn-bucket
-    Description: Base name for the S3 bucket (account ID, environment, and region will be appended)
-
-  environment:
+  Environment:
     Type: String
     Default: devl
-    Description: "Deployment environment for the S3 bucket"
+    AllowedValues: [devl, stag, prod]
+    Description: "Deployment environment"
+
+  TableBaseName:
+    Type: String
+    Default: orders
+    Description: "Base name for the DynamoDB Orders table"
+    MinLength: 1
+    MaxLength: 20
+    AllowedPattern: "^[a-z0-9-]+$"
+
+  BillingMode:
+    Type: String
+    Default: PAY_PER_REQUEST
+    AllowedValues: [PAY_PER_REQUEST, PROVISIONED]
+    Description: "Billing mode for the DynamoDB table (PAY_PER_REQUEST for event-driven, PROVISIONED for predictable traffic)"
+
+  ProvisionedReadCapacity:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 40000
+    Description: "Read capacity units (only used if BillingMode is PROVISIONED)"
+
+  ProvisionedWriteCapacity:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 40000
+    Description: "Write capacity units (only used if BillingMode is PROVISIONED)"
+
+  EnableStreams:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: "Enable DynamoDB Streams to capture order events for EventBridge Pipes"
+
+  StreamViewType:
+    Type: String
+    Default: NEW_AND_OLD_IMAGES
+    AllowedValues: [KEYS_ONLY, NEW_IMAGE, OLD_IMAGE, NEW_AND_OLD_IMAGES]
+    Description: "Stream record type: KEYS_ONLY, NEW_IMAGE, OLD_IMAGE, or NEW_AND_OLD_IMAGES"
+
+  EnablePointInTimeRecovery:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: "Enable point-in-time recovery for orders data protection"
+
+  KmsKey:
+    Type: String
+    Default: ''
+    AllowedPattern: "^(alias/[a-zA-Z0-9_-]+|arn:aws:kms:[a-z0-9-]+:[0-9]+:key/[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)?$"
+    ConstraintDescription: "KMS Key can be a key name, alias (alias/my-key), or ARN, or leave empty for AWS managed encryption"
+    Description: "Optional KMS Key for DynamoDB table encryption (empty = AWS managed encryption)"
 
   CiSuffix:
     Type: String
     Default: ""
-    Description: "Optional CI prefix to append to the bucket name"
+    Description: "Optional CI suffix to append to table name for unique deployments (e.g., pipeline-id)"
 
 Conditions:
-  HasCiSuffix: !Not [!Equals [!Ref CiSuffix, ""]]
+  HasKmsKey: !Not [!Equals [!Ref KmsKey, ""]]
 
 Resources:
-  S3Bucket:
-    Type: AWS::S3::Bucket
+  OrdersDynamoDBNestedStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: "Invokes the nested DynamoDB CloudFormation template to create an Orders table with event streams, encryption, and PITR enabled for event-driven order processing"
+        must:
+          - "Nested template must be accessible at the specified S3 location"
+          - "IAM principal must have s3:GetObject permission on the template S3 bucket"
+          - "CloudFormation service must have permission to create DynamoDB tables, streams, and KMS resources"
     Properties:
-      BucketName: !If
-        - HasCiSuffix
-        - !Sub '${ProjectName}-${BucketBaseName}-${AWS::AccountId}-${environment}-${AWS::Region}-${CiSuffix}'
-        - !Sub '${ProjectName}-${BucketBaseName}-${AWS::AccountId}-${environment}-${AWS::Region}'
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+      TemplateURL: !Sub '${NestedTemplatesBucketUrl}/cfn-nested-aws-dynamodb-table/template.yaml'
+      Parameters:
+        ProjectName: !Ref ProjectName
+        TableBaseName: !Ref TableBaseName
+        Environment: !Ref Environment
+        CiSuffix: !Ref CiSuffix
+        BillingMode: !Ref BillingMode
+        ProvisionedReadCapacity: !Ref ProvisionedReadCapacity
+        ProvisionedWriteCapacity: !Ref ProvisionedWriteCapacity
+        PartitionKeyName: 'OrderID'
+        PartitionKeyType: 'S'
+        SortKeyName: 'Timestamp'
+        SortKeyType: 'S'
+        EnableStreams: !Ref EnableStreams
+        StreamViewType: !Ref StreamViewType
+        EnablePointInTimeRecovery: !Ref EnablePointInTimeRecovery
+        KmsKey: !If [HasKmsKey, !Ref KmsKey, '']
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Component
+          Value: OrdersDatabase
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
 
 Outputs:
-  S3BucketName:
-    Description: "Name of the S3 bucket"
-    Value: !Ref S3Bucket
+  OrdersTableName:
+    Description: "Name of the DynamoDB Orders table for API Lambda integration"
+    Value: !GetAtt OrdersDynamoDBNestedStack.Outputs.TableName
     Export:
-      Name: !Sub "${AWS::StackName}-BucketName"
+      Name: !Sub "${AWS::StackName}-OrdersTableName"
 
-  S3BucketArn:
-    Description: "ARN of the S3 bucket"
-    Value: !GetAtt S3Bucket.Arn
+  OrdersTableArn:
+    Description: "ARN of the DynamoDB Orders table for IAM policy configuration"
+    Value: !GetAtt OrdersDynamoDBNestedStack.Outputs.TableArn
     Export:
-      Name: !Sub "${AWS::StackName}-BucketArn"
+      Name: !Sub "${AWS::StackName}-OrdersTableArn"
+
+  OrdersStreamArn:
+    Description: "ARN of the DynamoDB Stream for EventBridge Pipes integration"
+    Value: !GetAtt OrdersDynamoDBNestedStack.Outputs.StreamArn
+    Export:
+      Name: !Sub "${AWS::StackName}-OrdersStreamArn"
