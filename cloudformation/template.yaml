@@ -144,8 +144,8 @@ Conditions:
 Resources:
   OrdersDynamoDBNestedStack:
     Type: AWS::CloudFormation::Stack
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Metadata:
       com.aws.cloudformation.Context:
         why: "Invokes the nested DynamoDB CloudFormation template to create an Orders table with event streams, encryption, and PITR enabled for event-driven order processing"
